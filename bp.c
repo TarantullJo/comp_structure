@@ -19,7 +19,7 @@ int btb_entry_calc;//helper to calculate the position in the BTB array, a hex nu
 int max_hist_value;//maximum value, in decimal, that hist can get, so, for example, id hist_size=4->max hist value = 2^4 = 16;
 int tag_help;//size of tag in bits, help calculate tag for comperison;
 int share;//what kind of share is the SMT_entry calcuated by;
-unsigned FSM_state;//defoult FSM state;
+unsigned DefaultFSM_state;//default FSM state;
 int bit_num;//log2(btb_size);
 
 bool GlobalHist;
@@ -33,16 +33,13 @@ uint8_t* SMT;//state machines table
 
 int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned fsmState,
 			bool isGlobalHist, bool isGlobalTable, int Shared){
-    //printf("BP_init\n");
-    //!!!add checks on the parameters
-    
-    
+
     //initialize global var's
     btb_entry_calc = find_tag(btbSize); 
     max_hist_value=power(2,historySize);
     tag_help=tagSize;
     share=Shared;
-    FSM_state = fsmState;
+    DefaultFSM_state = fsmState;
     GlobalHist=true;
     GlobalTable=true;
    // SIM_stats sim;
@@ -52,18 +49,10 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
     //itarator ;
     int i;
 
-
-  /*  printf("btbSize = %d\n",btbSize);
-    printf("history = %d\n",historySize);
-    printf("tagSize = %d\n",tagSize);
-    printf("shared = %d\n",Shared);*/
-
-
 //allocate btb 
     BTB=(BTB_entry*)malloc(sizeof(BTB_entry)*btbSize);
     if (BTB==NULL)return -1; //malloc check;
     sim.size=(tagSize+30)*btbSize;
-   // printf("sim size1 = %d\n",sim.size);
     for (i=0; i<btbSize; i++){
         BTB[i].PC=0;
         BTB[i].tag=0;
@@ -77,7 +66,6 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
             return -1;
         }
         sim.size = sim.size + historySize;
-      //  printf("sim size2.global = %d\n",sim.size);
         *hist_buf = 0;
 
         for(i=0; i<btbSize; i++){
@@ -92,7 +80,6 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
             return -1;
         }
         sim.size = sim.size + historySize*btbSize;
-       // printf("sim size2.local = %d\n",sim.size);
         for (i=0; i<btbSize; i++){
             hist_buf[i]=0;
             BTB[i].hist=&(hist_buf[i]);
@@ -118,16 +105,13 @@ int BP_init(unsigned btbSize, unsigned historySize, unsigned tagSize, unsigned f
         return -1;
     }
     sim.size = sim.size + smt_size*2;
-   // printf("sim size3 = %d\n",sim.size);
     for( i=0; i<smt_size; i++){
         SMT[i]=fsmState;
     }
-    //printf("sim size = %d\n",sim.size);
 	return 0;
 }
 
 bool BP_predict(uint32_t pc, uint32_t *dst){
-   //printf("BP_predict\n");
     sim.br_num++;//add branch to statistics;
     int btb_entry = pc & btb_entry_calc;
     btb_entry=btb_entry>>2;//calculate btb table entry;
@@ -135,82 +119,74 @@ bool BP_predict(uint32_t pc, uint32_t *dst){
     int stm_entry = calc_stm_entry(pc,hist);///State machine entry;
     uint32_t tag = calc_tag(pc);//calculate tag for comparisson;
     uint8_t state = SMT[stm_entry];
-    //printf("stm_entry is :%d\n", stm_entry);
-    //printf("state is :%d\n", state);
-
-    if ((BTB[btb_entry].tag == (int)tag) && (state > 1)){     
+    if ((BTB[btb_entry].tag == tag) && (state > 1)){     
         *dst = BTB[btb_entry].PC;
         return true;
     }
-     //   printf("sim size = %d\n",sim.size);
     *dst = pc+4;
     return false;
 }
 
 void BP_update(uint32_t pc, uint32_t targetPc, bool taken, uint32_t pred_dst){
-    //printf("\n BP_update\n");
     int btb_entry = pc & btb_entry_calc;
     btb_entry=btb_entry>>2;//calculate entry to the btb table;
-    uint8_t hist = *(BTB[btb_entry].hist);
+    uint8_t hist = *(BTB[btb_entry].hist);//find the current history state;
     int stm_entry = calc_stm_entry(pc,hist);//find currentstm entry;
-    //printf("stm_entry is :%d\n", stm_entry);
     uint32_t tag = calc_tag(pc);//tag for comparisson;
-    uint8_t state = SMT[stm_entry];
-    //printf("state is :%d\n", state);
-    int new_stm_entry=0; 
+    uint8_t state=0;
+
     //new branch command, enter command data;
-  //  printf("1\n");
     if(BTB[btb_entry].tag != tag){
         BTB[btb_entry].tag = tag;
         BTB[btb_entry].PC = targetPc;
-        //printf("2\n");
         if(GlobalHist==false){
-            *(BTB[btb_entry].hist)=0;
-          //  printf("3\n");
-            new_stm_entry = calc_stm_entry(pc,0);
-      //  printf("stm_entry is :%d\n",new_stm_entry);
-            SMT[new_stm_entry]=FSM_state;
+            hist = 0;
         }
-       // return;
-    }
-    //update history and SMT ;
 
-    //printf("4\n");
-    //maybe else??
+        if(GlobalTable == false){
+            int helper = max_hist_value * btb_entry;
+            for(int i=0;i<max_hist_value;i++){
+                SMT[helper + i] = DefaultFSM_state;
+            }
+        }
+        
+    stm_entry = calc_stm_entry(pc,hist);
+    }
+
+    //update target
+    if (BTB[btb_entry].PC != targetPc){
+        BTB[btb_entry].PC = targetPc;
+    }
+
+    //update by the results of the branch;
+    state = SMT[stm_entry];
     if (taken==true){
-        hist=(hist*2+1)%max_hist_value;
-        //  printf("5\n");
+        hist=((hist<<1)+1)%max_hist_value;
         if (state!=3)state++;
     }
     else {
-        //printf("6\n");
-        hist=(hist*2)%max_hist_value;
+        hist=(hist<<1)%max_hist_value;
         if (state!=0)state--;   
     }
-    //printf("7\n");
     SMT[stm_entry] = state;
     *(BTB[btb_entry].hist)=hist;
-    //maybe endelse??
-//update statistic;
     if((((pred_dst!=targetPc)&&(taken==true))||((pred_dst!=pc+4)&&(taken==false)))){
-        //rintf("8\n");
         sim.flush_num++;
     }
 	return;
 }
 
 void BP_GetStats(SIM_stats *curStats){
-  //  printf("BP_GetStats");
     curStats->br_num=sim.br_num;
     curStats->flush_num=sim.flush_num;
-   // printf("sim size1 = %d\n",sim.size);
     curStats->size=sim.size;
     free(SMT);
     free(hist_buf);
     free(BTB);
 	return;
 }
-///////////////////////////////////////////////
+///////////////////////////////////////////////help functions////////////////////////////////
+
 int power(int base, int pow){
     int ret_val=1;
     for(int i=0;i<pow;i++){
@@ -221,7 +197,7 @@ int power(int base, int pow){
 int find_tag(unsigned Size){
     int ret_val;
     switch(Size){
-        case 32 : ret_val = 0x007c; bit_num = 5; break;//global entry helper/////0000000001111100//two zerous in the end
+        case 32 : ret_val = 0x007c; bit_num = 5; break;//global entry helper/////0000000001111100//two zeroes in the end
         case 16 : ret_val = 0x003c; bit_num = 4; break;
         case 8  : ret_val = 0x001c; bit_num = 3; break;
         case 4  : ret_val = 0x000c; bit_num = 2; break;
@@ -248,7 +224,6 @@ int calc_stm_entry(uint32_t pc,uint8_t hist){
         return helper;
     }
     else {
-       // printf ("calc_stm_entry,1\n");
         int btb_entry = pc & btb_entry_calc;
         btb_entry=btb_entry>>2;
         return (btb_entry*max_hist_value+hist); 
